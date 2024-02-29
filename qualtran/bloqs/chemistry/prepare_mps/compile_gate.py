@@ -15,8 +15,8 @@ from qualtran.bloqs.rotations.phase_gradient import PhaseGradientState
 
 @attrs.frozen
 class CompileGateFromColumnsNoPG(Bloq):
-    phase_bitsize: int # number of ancilla qubits used to encode the state preparation's rotations
-    gate_cols: Tuple[int, Tuple[complex, ...]] # tuple with the columns/rows of the gate that are specified
+    phase_bitsize: int
+    gate_cols: Tuple[Tuple[int, Tuple[complex, ...]],...]
     uncompute: bool = False
 
     @property
@@ -40,7 +40,7 @@ class CompileGateFromColumnsNoPG(Bloq):
 @attrs.frozen
 class CompileGateFromColumns(Bloq):
     phase_bitsize: int # number of ancilla qubits used to encode the state preparation's rotations
-    gate_cols: Tuple[int, Tuple[complex, ...]] # tuple with the columns of the gate that are specified
+    gate_cols: Tuple[Tuple[int, Tuple[complex, ...]],...] # tuple with the columns of the gate that are specified and the indices
     uncompute: bool = False
 
     def __attrs_post_init__(self):
