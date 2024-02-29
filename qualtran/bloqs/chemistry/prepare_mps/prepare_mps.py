@@ -8,37 +8,39 @@ import numpy as np
 import scipy as scp
 
 from qualtran import Bloq, Signature, BloqBuilder, SoquetT
-from qualtran.bloqs.chemistry.prepare_mps.compile_gate import CompileGateGivenVectorsWithoutPG
+from qualtran.bloqs.chemistry.prepare_mps.compile_gate import CompileGateFromColumns
 
 
 @attrs.frozen
 class PrepareMPS (Bloq):
     phase_bitsize: int
-    tensors: Tuple[ArrayLike]
+    tensors: Tuple[Tuple]
+    # control_bitsize: int = 0
     uncompute: bool = False
 
     @property
     def signature(self):
-        return Signature.build(input_state=self.state_bitsize)
+        # return Signature.build(control=self.control_bitsize, input_state=self.state_bitsize, phase_gradient=self.phase_bitsize)
+        return Signature.build(input_state=self.state_bitsize, phase_gradient=self.phase_bitsize)
     
     @property
     def state_bitsize(self):
         return len(self.tensors)
     
-    def build_composite_bloq(self, bb: BloqBuilder, *, input_state: SoquetT) -> Dict[str, SoquetT]:
+    def build_composite_bloq(self, bb: BloqBuilder, *, input_state: SoquetT, phase_gradient: SoquetT) -> Dict[str, SoquetT]:
         gate = self.gates_from_tensors()
         input_qubits = bb.split(input_state)
-        for i in range(self.state_bitsize):
-            if self.uncompute:
-                qi = self.state_bitsize - i - 1
-            else:
-                qi = i
-            gate_size = (len(gate[qi])-1).bit_length()
-            input_qs = bb.join(input_qubits[qi:(qi+gate_size)])
-            gate_compiler = CompileGateGivenVectorsWithoutPG(self.phase_bitsize, gate[i].T, self.uncompute)
-            input_qs = bb.add(gate_compiler, gate_input=input_qs)
-            input_qubits[qi:(qi+gate_size)] = bb.split(input_qs)
-        return {"input_state": input_state}
+        for i in list(range(self.state_bitsize))[::(1-2*self.uncompute)]:
+            gate_size = (len(gate[i])-1).bit_length()
+            input_qs = bb.join(input_qubits[i:(i+gate_size)])
+            ra = bb.allocate(1)
+            gate_cols = tuple([(i, tuple(gc)) for i, gc in enumerate(gate[i].T)])
+            gate_compiler = CompileGateFromColumns(self.phase_bitsize, gate_cols, self.uncompute)
+            input_qs, phase_gradient, ra = bb.add(gate_compiler, gate_input=input_qs, phase_grad=phase_gradient, reflection_ancilla=ra)
+            bb.free(ra)
+            input_qubits[i:(i+gate_size)] = bb.split(input_qs)
+        input_state = bb.join(input_qubits)
+        return {"input_state": input_state, "phase_gradient": phase_gradient}
     
     @staticmethod
     def fill_gate (gate):
@@ -59,14 +61,18 @@ class PrepareMPS (Bloq):
         bitsize = len(self.tensors)
         gates = []
         if len(self.tensors) > 1:
-            gates.append(PrepareMPS.fill_gate(self.tensors[0].T.reshape((-1,1))))
+            gates.append(PrepareMPS.fill_gate(np.array(self.tensors[0]).T.reshape((-1,1))))
         for i in range(1,bitsize-1):
-            tensor = PrepareMPS.revert_dims(self.tensors[i],[1]).T
+            tensor = PrepareMPS.revert_dims(np.array(self.tensors[i]),[1]).T
             gates.append(PrepareMPS.revert_dims(self.fill_gate(tensor.reshape((-1,tensor.shape[2]))),[1]))
-        gates.append(PrepareMPS.fill_gate(self.tensors[-1].T.reshape((2,-1))))
+        gates.append(PrepareMPS.fill_gate(np.array(self.tensors[-1]).T.reshape((2,-1))))
         return gates
     
     @staticmethod
     def from_quimb_mps (mps: MatrixProductState, phase_bitsize: int, uncompute: bool = False) -> PrepareMPS:
         tensors = [t.data for t in mps]
-        return PrepareMPS(tensors=tensors, phase_bitsize=phase_bitsize, uncompute=uncompute)
+        tensors[0] = tuple([tuple(l) for l in tensors[0]])
+        for i in range(1,len(tensors)-1):
+            tensors[i] = tuple([tuple([tuple(i) for i in l]) for l in tensors[i]])
+        tensors[-1] = tuple([tuple(l) for l in tensors[-1]])
+        return PrepareMPS(tensors=tuple(tensors), phase_bitsize=phase_bitsize, uncompute=uncompute)
