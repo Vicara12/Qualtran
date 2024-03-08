@@ -8,7 +8,8 @@ import numpy as np
 import scipy as scp
 
 from qualtran import Bloq, Signature, BloqBuilder, SoquetT
-from qualtran.bloqs.chemistry.prepare_mps.compile_gate import CompileGateFromColumns
+from qualtran.bloqs.chemistry.prepare_mps.decompose_gate_hr import DecomposeGateViaHR
+from qualtran.bloqs.rotations.phase_gradient import PhaseGradientState
 
 
 @attrs.frozen
@@ -17,30 +18,43 @@ class PrepareMPS (Bloq):
     tensors: Tuple[Tuple]
     # control_bitsize: int = 0
     uncompute: bool = False
+    internal_phase_gradient: bool = True
 
     @property
     def signature(self):
         # return Signature.build(control=self.control_bitsize, input_state=self.state_bitsize, phase_gradient=self.phase_bitsize)
-        return Signature.build(input_state=self.state_bitsize, phase_gradient=self.phase_bitsize)
+        return Signature.build(input_state=self.state_bitsize, phase_gradient=(not self.internal_phase_gradient)*self.phase_bitsize)
     
     @property
     def state_bitsize(self):
         return len(self.tensors)
     
-    def build_composite_bloq(self, bb: BloqBuilder, *, input_state: SoquetT, phase_gradient: SoquetT) -> Dict[str, SoquetT]:
-        gate = self.gates_from_tensors()
+    def build_composite_bloq(self, bb: BloqBuilder, *, input_state: SoquetT, **soqs: SoquetT) -> Dict[str, SoquetT]:
+        """Extra soquets inside soqs are:
+            * phase_grad: a phase gradient state of size phase_bitsize if internal_phase_gradient
+                    is set to False
+        """
+        if self.internal_phase_gradient:
+            phase_gradient = bb.add(PhaseGradientState(self.phase_bitsize))
+        else:
+            phase_gradient = soqs.pop("phase_grad")
+        gates = self.gates_from_tensors()
         input_qubits = bb.split(input_state)
         for i in list(range(self.state_bitsize))[::(1-2*self.uncompute)]:
-            gate_size = (len(gate[i])-1).bit_length()
+            gate_size = (len(gates[i])-1).bit_length()
             input_qs = bb.join(input_qubits[i:(i+gate_size)])
             ra = bb.allocate(1)
-            gate_cols = tuple([(i, tuple(gc)) for i, gc in enumerate(gate[i].T)])
-            gate_compiler = CompileGateFromColumns(self.phase_bitsize, gate_cols, self.uncompute)
+            gate_cols = tuple([(i, tuple(gc)) for i, gc in enumerate(gates[i].T)])
+            gate_compiler = DecomposeGateViaHR(self.phase_bitsize, gate_cols, self.uncompute)
             input_qs, phase_gradient, ra = bb.add(gate_compiler, gate_input=input_qs, phase_grad=phase_gradient, reflection_ancilla=ra)
             bb.free(ra)
             input_qubits[i:(i+gate_size)] = bb.split(input_qs)
         input_state = bb.join(input_qubits)
-        return {"input_state": input_state, "phase_gradient": phase_gradient}
+        if self.internal_phase_gradient:
+            bb.add(PhaseGradientState(self.phase_bitsize).adjoint(), phase_grad=phase_gradient)
+        else:
+            soqs["phase_grad"] = phase_gradient
+        return {"input_state": input_state} | soqs
     
     @staticmethod
     def fill_gate (gate):
