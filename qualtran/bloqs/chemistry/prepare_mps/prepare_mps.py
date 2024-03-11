@@ -43,11 +43,9 @@ class PrepareMPS (Bloq):
         for i in list(range(self.state_bitsize))[::(1-2*self.uncompute)]:
             gate_size = (len(gates[i])-1).bit_length()
             input_qs = bb.join(input_qubits[i:(i+gate_size)])
-            ra = bb.allocate(1)
             gate_cols = tuple([(i, tuple(gc)) for i, gc in enumerate(gates[i].T)])
             gate_compiler = DecomposeGateViaHR(self.phase_bitsize, gate_cols, self.uncompute)
-            input_qs, phase_gradient, ra = bb.add(gate_compiler, gate_input=input_qs, phase_grad=phase_gradient, reflection_ancilla=ra)
-            bb.free(ra)
+            input_qs, phase_gradient = bb.add(gate_compiler, gate_input=input_qs, phase_grad=phase_gradient)
             input_qubits[i:(i+gate_size)] = bb.split(input_qs)
         input_state = bb.join(input_qubits)
         if self.internal_phase_gradient:
@@ -84,6 +82,7 @@ class PrepareMPS (Bloq):
     
     @staticmethod
     def from_quimb_mps (mps: MatrixProductState, phase_bitsize: int, uncompute: bool = False) -> PrepareMPS:
+        mps.compress()
         tensors = [t.data for t in mps]
         tensors[0] = tuple([tuple(l) for l in tensors[0]])
         for i in range(1,len(tensors)-1):
