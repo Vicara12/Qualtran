@@ -81,9 +81,30 @@ class PrepareMPS (Bloq):
         return gates
     
     @staticmethod
+    def _extract_tensors (mps: MatrixProductState):
+        r""" Extracts the tensors with the desired index order.
+        Sometimes Quimb might reorder internal indices, the correct order used in this bloq is:
+          [bond_0, physical_0] for the first site
+          [bond_{i-1}, bond_i, physical_i] for the internal sites
+          [bond_{n-2}, physical_{n-1}] for the last site
+        """
+        virt_inds = mps.inner_inds()
+        phys_inds = mps.outer_inds()
+        sites = len(phys_inds)
+        corr_inds = [(virt_inds[0], phys_inds[0])] +\
+                    [(virt_inds[i-1], virt_inds[i], phys_inds[i]) for i in range(1,sites-1)] +\
+                    [(virt_inds[sites-2], phys_inds[sites-1])]
+        transpositions = []
+        for i in range(sites):
+            transpositions.append([mps[i].inds.index(ind) for ind in corr_inds[i]])
+        # for each site, get its coefficient tensor reordered in the correct format
+        return [np.transpose(site.data, transp) for site, transp in zip(mps, transpositions)]
+
+    
+    @staticmethod
     def from_quimb_mps (mps: MatrixProductState, phase_bitsize: int, uncompute: bool = False) -> PrepareMPS:
         mps.compress()
-        tensors = [t.data for t in mps]
+        tensors = PrepareMPS._extract_tensors(mps)
         tensors[0] = tuple([tuple(l) for l in tensors[0]])
         for i in range(1,len(tensors)-1):
             tensors[i] = tuple([tuple([tuple(i) for i in l]) for l in tensors[i]])
