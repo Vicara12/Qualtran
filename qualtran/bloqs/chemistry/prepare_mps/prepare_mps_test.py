@@ -47,6 +47,25 @@ def test_untrimmed_mps(phase_bitsize: int, state: Tuple[complex, ...]):
     coefs = bb.finalize(state=state).tensor_contract()
     assert abs(np.dot(mps.to_dense().conj()[:,0], coefs)) > 0.90
 
+@pytest.mark.parametrize(
+    "phase_bitsize, state",
+    [
+        # 4 sites
+        [4, ((-0.07682732490283989+0.15147492902068269j), (-0.013084036514757464-0.22425890159592426j), (0.08118165220365978-0.05522733648035143j), (-0.11533741257627657-0.035389807420842134j), (0.0002812925262672198+0.023951209732558983j), (-0.10168718952348461-0.3029116191292497j), (0.2985542757093312-0.13775558345124608j), (0.11577702666216419+0.004595530607986605j), (0.2428967980069414-0.14829932701377663j), (-0.1942374440925404-0.02811171570596936j), (-0.19387329968261618-0.2392196426426074j), (0.2566854641869052-0.20083381626523344j), (0.06594095898948661+0.035952610911029415j), (0.10081979402101338+0.29624055051276427j), (-0.02502095387266981+0.3018650181057659j), (0.2930486993328657+0.2656187168382382j))],
+    ],
+)
+def test_trimmed_mps(phase_bitsize: int, state: Tuple[complex, ...]):
+    sites = (len(state)-1).bit_length()
+    mps = MatrixProductState.from_dense(state, dims=(2,)*sites)
+    mps.compress(max_bond=2)
+    mps_prep = PrepareMPS.from_quimb_mps(mps, phase_bitsize)
+    assert_valid_bloq_decomposition(mps_prep)
+    bb = BloqBuilder()
+    state = bb.allocate(sites)
+    state = bb.add(mps_prep, input_state=state)
+    coefs = bb.finalize(state=state).tensor_contract()
+    assert abs(np.dot(mps.to_dense().conj()[:,0], coefs)) > 0.90
+
 
 @pytest.mark.parametrize(
     "phase_bitsize, state",
