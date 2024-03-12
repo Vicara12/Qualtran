@@ -57,7 +57,7 @@ class PrepareMPS (Bloq):
     
     @staticmethod
     def fill_gate (gate: ArrayLike) -> ArrayLike:
-        ker = scp.linalg.null_space(gate.T)
+        ker = scp.linalg.null_space(gate.T.conj())
         return np.hstack((gate, ker))
 
     @staticmethod
