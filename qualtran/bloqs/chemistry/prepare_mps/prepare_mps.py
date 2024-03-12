@@ -117,6 +117,7 @@ class PrepareMPS (Bloq):
         r"""Constructs a MPS preparation bloq from a Quimb MPS object.
         Arguments are a Quimb MatrixProductState object and all the others that the default
         constructor of PrepareMPS receives, except for tensors.
+        The bond dimensions of the mps MUST be powers of two.
         """
         mps.compress()
         tensors = PrepareMPS._extract_tensors(mps)
