@@ -142,6 +142,7 @@ class PrepareMPS (Bloq):
         virt_inds = mps.inner_inds()
         phys_inds = mps.outer_inds()
         sites = len(phys_inds)
+        # if the MPS is one site long then there is just one index, no reordering needed
         if sites == 1:
             return [PrepareMPS._tensor_to_tuple(mps[0].data)]
         corr_inds = [(virt_inds[0], phys_inds[0])] +\
