@@ -6,6 +6,7 @@ from numpy.typing import ArrayLike
 from quimb.tensor import MatrixProductState
 import numpy as np
 import scipy as scp
+from numpy.typing import ArrayLike
 
 from qualtran import Bloq, Signature, BloqBuilder, SoquetT
 from qualtran.bloqs.chemistry.prepare_mps.decompose_gate_hr import DecomposeGateViaHR
@@ -21,12 +22,12 @@ class PrepareMPS (Bloq):
     internal_phase_gradient: bool = True
 
     @property
-    def signature(self):
+    def signature(self) -> Signature:
         # return Signature.build(control=self.control_bitsize, input_state=self.state_bitsize, phase_gradient=self.phase_bitsize)
         return Signature.build(input_state=self.state_bitsize, phase_gradient=(not self.internal_phase_gradient)*self.phase_bitsize)
     
     @property
-    def state_bitsize(self):
+    def state_bitsize(self) -> int:
         return len(self.tensors)
     
     def build_composite_bloq(self, bb: BloqBuilder, *, input_state: SoquetT, **soqs: SoquetT) -> Dict[str, SoquetT]:
@@ -55,12 +56,12 @@ class PrepareMPS (Bloq):
         return {"input_state": input_state} | soqs
     
     @staticmethod
-    def fill_gate (gate):
+    def fill_gate (gate: ArrayLike) -> ArrayLike:
         ker = scp.linalg.null_space(gate.T)
         return np.hstack((gate, ker))
 
     @staticmethod
-    def revert_dims (M, dims):
+    def revert_dims (M: ArrayLike, dims: Tuple[int,...]):
         for d in dims:
             shape = M.shape
             wires = (shape[d]-1).bit_length()
@@ -69,7 +70,7 @@ class PrepareMPS (Bloq):
             M = M.reshape(divided).transpose(reorder).reshape(shape)
         return M
 
-    def gates_from_tensors (self):
+    def gates_from_tensors (self) -> Tuple[ArrayLike,...]:
         bitsize = len(self.tensors)
         gates = []
         if len(self.tensors) > 1:
@@ -81,7 +82,7 @@ class PrepareMPS (Bloq):
         return gates
     
     @staticmethod
-    def _extract_tensors (mps: MatrixProductState):
+    def _extract_tensors (mps: MatrixProductState) -> Tuple[ArrayLike,...]:
         r""" Extracts the tensors with the desired index order.
         Sometimes Quimb might reorder internal indices, the correct order used in this bloq is:
           [bond_0, physical_0] for the first site
@@ -91,6 +92,8 @@ class PrepareMPS (Bloq):
         virt_inds = mps.inner_inds()
         phys_inds = mps.outer_inds()
         sites = len(phys_inds)
+        if sites == 1:
+            return [mps[0].data]
         corr_inds = [(virt_inds[0], phys_inds[0])] +\
                     [(virt_inds[i-1], virt_inds[i], phys_inds[i]) for i in range(1,sites-1)] +\
                     [(virt_inds[sites-2], phys_inds[sites-1])]
