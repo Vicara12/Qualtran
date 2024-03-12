@@ -29,10 +29,11 @@ class PrepareMPS (Bloq):
     the from_quimb_mps method.
 
     Args:
-        tensors: tuple of tensors (in tuple format) that encode the MPS. The format in the case of
-            a single site MPS is (((coef_0, coef_1),),). For a two site mps the tensor disposition
-            is ([bond_dim_0, physical_ind_0], [bond_dim_0, physical_ind_1]) for the first and second
-            sites. In a n-site MPS the disposition is ([bond_dim_0, physical_ind_0], ...
+        tensors: tuple of tensors (in tuple format) that encode the MPS in left canonical form.
+            The format in the case of a single site MPS is (((coef_0, coef_1),),). For a two site
+            mps the tensor disposition is
+            ([bond_dim_0, physical_ind_0], [bond_dim_0, physical_ind_1]) for the first and second
+            sites. In a n-site MPS the disposition is ([bond_dim_0, physical_ind_0], ...,
             [bond_dim_{i-1}, bond_dim_i, physical_ind_i], ...,
             [bond_dim_{n-2}, physical_ind_{n-1}]). For an example of this encoding refer to the
             tutorial.
@@ -124,10 +125,10 @@ class PrepareMPS (Bloq):
         return gates
     
     @staticmethod
-    def _tensor_to_tuple (T: ArrayLike) -> Tuple:
+    def tensor_to_tuple (T: ArrayLike) -> Tuple:
         if len(T.shape) == 1:
             return tuple(T)
-        return tuple(map(PrepareMPS._tensor_to_tuple, T))
+        return tuple(map(PrepareMPS.tensor_to_tuple, T))
 
     @staticmethod
     def _extract_tensors (mps: MatrixProductState) -> Tuple[ArrayLike,...]:
@@ -144,7 +145,7 @@ class PrepareMPS (Bloq):
         sites = len(phys_inds)
         # if the MPS is one site long then there is just one index, no reordering needed
         if sites == 1:
-            return [PrepareMPS._tensor_to_tuple(mps[0].data)]
+            return [PrepareMPS.tensor_to_tuple(mps[0].data)]
         corr_inds = [(virt_inds[0], phys_inds[0])] +\
                     [(virt_inds[i-1], virt_inds[i], phys_inds[i]) for i in range(1,sites-1)] +\
                     [(virt_inds[sites-2], phys_inds[sites-1])]
@@ -153,7 +154,7 @@ class PrepareMPS (Bloq):
             transpositions.append([mps[i].inds.index(ind) for ind in corr_inds[i]])
         # for each site, get its coefficient tensor reordered according to what was computed before
         reordered = [np.transpose(site.data, transp) for site, transp in zip(mps, transpositions)]
-        return [PrepareMPS._tensor_to_tuple(t) for t in reordered]
+        return [PrepareMPS.tensor_to_tuple(t) for t in reordered]
 
     
     @staticmethod
