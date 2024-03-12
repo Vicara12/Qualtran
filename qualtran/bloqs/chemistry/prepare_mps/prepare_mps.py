@@ -15,16 +15,15 @@ from qualtran.bloqs.rotations.phase_gradient import PhaseGradientState
 
 @attrs.frozen
 class PrepareMPS (Bloq):
-    phase_bitsize: int
     tensors: Tuple[Tuple]
-    # control_bitsize: int = 0
+    phase_bitsize: int
     uncompute: bool = False
     internal_phase_gradient: bool = True
 
     @property
     def signature(self) -> Signature:
         # return Signature.build(control=self.control_bitsize, input_state=self.state_bitsize, phase_gradient=self.phase_bitsize)
-        return Signature.build(input_state=self.state_bitsize, phase_gradient=(not self.internal_phase_gradient)*self.phase_bitsize)
+        return Signature.build(input_state=self.state_bitsize, phase_grad=(not self.internal_phase_gradient)*self.phase_bitsize)
     
     @property
     def state_bitsize(self) -> int:
@@ -114,11 +113,11 @@ class PrepareMPS (Bloq):
 
     
     @staticmethod
-    def from_quimb_mps (mps: MatrixProductState, **args) -> PrepareMPS:
+    def from_quimb_mps (mps: MatrixProductState, phase_bitsize: int, **kwargs) -> PrepareMPS:
         r"""Constructs a MPS preparation bloq from a Quimb MPS object.
         Arguments are a Quimb MatrixProductState object and all the others that the default
         constructor of PrepareMPS receives, except for tensors.
         """
         mps.compress()
         tensors = PrepareMPS._extract_tensors(mps)
-        return PrepareMPS(tensors=tuple(tensors), **args)
+        return PrepareMPS(tensors=tuple(tensors), phase_bitsize=phase_bitsize, **kwargs)
