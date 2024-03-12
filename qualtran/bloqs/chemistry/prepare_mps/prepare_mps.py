@@ -41,10 +41,9 @@ class PrepareMPS (Bloq):
         gates = self._gates_from_tensors()
         input_qubits = bb.split(input_state)
         for i in list(range(self.state_bitsize))[::(1-2*self.uncompute)]:
-            gate_size = (len(gates[i])-1).bit_length()
+            gate_size = (len(gates[i][0][1])-1).bit_length()
             input_qs = bb.join(input_qubits[i:(i+gate_size)])
-            gate_cols = tuple([(i, tuple(gc)) for i, gc in enumerate(gates[i].T)])
-            gate_compiler = DecomposeGateViaHR(self.phase_bitsize, gate_cols, self.uncompute)
+            gate_compiler = DecomposeGateViaHR(self.phase_bitsize, gates[i], self.uncompute)
             input_qs, phase_gradient = bb.add(gate_compiler, gate_input=input_qs, phase_grad=phase_gradient)
             input_qubits[i:(i+gate_size)] = bb.split(input_qs)
         input_state = bb.join(input_qubits)
@@ -73,11 +72,16 @@ class PrepareMPS (Bloq):
         bitsize = len(self.tensors)
         gates = []
         if len(self.tensors) > 1:
-            gates.append(PrepareMPS._fill_gate(np.array(self.tensors[0]).T.reshape((-1,1))))
+            gates.append(((0, tuple(np.array(self.tensors[0]).T.reshape((-1)))),))
         for i in range(1,bitsize-1):
             tensor = PrepareMPS._revert_dims(np.array(self.tensors[i]),[1]).T
-            gates.append(PrepareMPS._revert_dims(self._fill_gate(tensor.reshape((-1,tensor.shape[2]))),[1]))
-        gates.append(PrepareMPS._fill_gate(np.array(self.tensors[-1]).T.reshape((2,-1))))
+            gate_cols_data = tensor.reshape((-1,tensor.shape[2])).T
+            blen = (gate_cols_data[0].shape[0] - 1).bit_length()
+            def rev_i (index: int, blen: int) -> int: return int(f"{index:0{blen}b}"[::-1], 2)
+            gate_cols = [(rev_i(i, blen), tuple(gcd)) for i, gcd in enumerate(gate_cols_data)]
+            gates.append(tuple(gate_cols))
+        last_gate_cols = np.array(self.tensors[-1]).T.reshape((2,-1)).T
+        gates.append(tuple([(i, tuple(gcd)) for i, gcd in enumerate(last_gate_cols)]))
         return gates
     
     @staticmethod
