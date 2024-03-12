@@ -1,14 +1,13 @@
-from __future__ import annotations
 import attrs
 from typing import Tuple, Dict
+from typing_extensions import Self
 from numpy.typing import ArrayLike
 
 from quimb.tensor import MatrixProductState
 import numpy as np
-import scipy as scp
 from numpy.typing import ArrayLike
 
-from qualtran import Bloq, Signature, BloqBuilder, SoquetT
+from qualtran import Bloq, Signature, BloqBuilder, SoquetT, bloq_example, BloqDocSpec
 from qualtran.bloqs.chemistry.prepare_mps.decompose_gate_hr import DecomposeGateViaHR
 from qualtran.bloqs.rotations.phase_gradient import PhaseGradientState
 
@@ -30,12 +29,12 @@ class PrepareMPS (Bloq):
 
     Args:
         tensors: tuple of tensors (in tuple format) that encode the MPS in left canonical form.
-            The format in the case of a single site MPS is (((coef_0, coef_1),),). For a two site
+            The format in the case of a single site MPS is `(((coef_0, coef_1),),)`. For a two site
             mps the tensor disposition is
-            ([bond_dim_0, physical_ind_0], [bond_dim_0, physical_ind_1]) for the first and second
-            sites. In a n-site MPS the disposition is ([bond_dim_0, physical_ind_0], ...,
+            `([bond_dim_0, physical_ind_0], [bond_dim_0, physical_ind_1])` for the first and second
+            sites. In a n-site MPS the disposition is `([bond_dim_0, physical_ind_0], ...,
             [bond_dim_{i-1}, bond_dim_i, physical_ind_i], ...,
-            [bond_dim_{n-2}, physical_ind_{n-1}]). For an example of this encoding refer to the
+            [bond_dim_{n-2}, physical_ind_{n-1}])`. For an example of this encoding refer to the
             tutorial.
         phase_bitsize: size of the register that is used to store the rotation angles when loading
             the tensor values. Bigger values increase the accuracy of the results but require
@@ -134,9 +133,9 @@ class PrepareMPS (Bloq):
     def _extract_tensors (mps: MatrixProductState) -> Tuple[ArrayLike,...]:
         r""" Extracts the tensors with the desired index order.
         Sometimes Quimb might reorder internal indices, the correct order used in this bloq is:
-          [bond_0, physical_0] for the first site
-          [bond_{i-1}, bond_i, physical_i] for the internal sites
-          [bond_{n-2}, physical_{n-1}] for the last site
+          (bond_0, physical_0) for the first site
+          (bond_{i-1}, bond_i, physical_i) for the internal sites
+          (bond_{n-2}, physical_{n-1}) for the last site
         """
         # compute the index reordering (transposition) necessary to set the tensor in the correct
         # format
@@ -158,7 +157,7 @@ class PrepareMPS (Bloq):
 
     
     @staticmethod
-    def from_quimb_mps (mps: MatrixProductState, phase_bitsize: int, **kwargs) -> PrepareMPS:
+    def from_quimb_mps (mps: MatrixProductState, phase_bitsize: int, **kwargs) -> Self:
         r"""Constructs a MPS preparation bloq from a Quimb MPS object.
         Arguments are a Quimb MatrixProductState object and all the others that the default
         constructor of PrepareMPS receives, except for tensors.
@@ -167,3 +166,23 @@ class PrepareMPS (Bloq):
         mps.compress()
         tensors = PrepareMPS._extract_tensors(mps)
         return PrepareMPS(tensors=tuple(tensors), phase_bitsize=phase_bitsize, **kwargs)
+
+
+@bloq_example
+def _prepare_mps() -> PrepareMPS:
+    tensors = (
+        (((-0.6221018876629202+0.6420514495011711j), (0.132495199023149+0.3193914665424655j)),
+         ((0.10238069190497784-0.009166000913358544j), (-0.0832597254195061+0.2523792530512902j))),
+
+        (((-0.11429513645729317+0j), (-0.8147485065475832+0.5684377651605244j)),
+         ((-0.9934468389311071+0j), (0.09373605922831829-0.06539823711795652j)))
+         )
+    prepare_mps = PrepareMPS(tensors=tensors, phase_bitsize=3)
+    return prepare_mps
+
+
+_MPS_PREPARATION_DOC = BloqDocSpec(
+    bloq_cls=PrepareMPS,
+    import_line='from qualtran.bloqs.chemistry.prepare_mps.prepare_mps import PrepareMPS',
+    examples=(_prepare_mps,),
+)

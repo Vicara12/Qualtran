@@ -19,11 +19,14 @@ import pytest
 
 from qualtran import BloqBuilder
 from quimb.tensor.tensor_1d import MatrixProductState
-from qualtran.bloqs.chemistry.prepare_mps.prepare_mps import PrepareMPS
+from qualtran.bloqs.chemistry.prepare_mps.prepare_mps import PrepareMPS, _prepare_mps
 from qualtran.bloqs.state_preparation.state_preparation_via_rotation import StatePreparationViaRotations
 from qualtran.bloqs.rotations.phase_gradient import PhaseGradientState
-from qualtran.testing import assert_valid_bloq_decomposition
+from qualtran.testing import assert_valid_bloq_decomposition, execute_notebook
 
+
+def test_state_prep_via_rotation(bloq_autotester):
+    bloq_autotester(_prepare_mps)
 
 @pytest.mark.parametrize(
     "phase_bitsize, state",
@@ -90,3 +93,9 @@ def test_prepare_mps_adjoint(phase_bitsize: int, state: Tuple[complex, ...]):
     bb.add(PhaseGradientState(phase_bitsize).adjoint(), phase_grad=pg)
     coefs = bb.finalize(state=state).tensor_contract()
     assert abs(coefs[0]) > 0.96
+
+def test_notebook_tutorial():
+    execute_notebook("prepare_mps_tutorial")
+
+def test_notebook():
+    execute_notebook("prepare_mps")

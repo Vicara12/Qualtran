@@ -74,6 +74,7 @@ import qualtran.bloqs.rotations.quantum_variable_rotation
 import qualtran.bloqs.state_preparation.prepare_uniform_superposition
 import qualtran.bloqs.state_preparation.state_preparation_via_rotation
 import qualtran.bloqs.swap_network
+import qualtran.bloqs.chemistry.prepare_mps.prepare_mps
 
 SOURCE_DIR = get_git_root() / 'qualtran/'
 
@@ -234,6 +235,14 @@ NOTEBOOK_SPECS: List[NotebookSpecV2] = [
             qualtran.bloqs.mcmt.multi_control_multi_target_pauli._CC_PAULI_DOC,
         ],
         directory=f'{SOURCE_DIR}/bloqs/',
+    ),
+    NotebookSpecV2(
+        title='MPS Preparation',
+        module=qualtran.bloqs.chemistry.prepare_mps.prepare_mps,
+        bloq_specs=[
+            qualtran.bloqs.chemistry.prepare_mps.prepare_mps._MPS_PREPARATION_DOC
+        ],
+        directory=f'{SOURCE_DIR}/bloqs/chemistry/prepare_mps/',
     ),
     # --------------------------------------------------------------------------
     # -----   Arithmetic   -----------------------------------------------------
