@@ -39,7 +39,7 @@ class PrepareMPS (Bloq):
             phase_gradient = bb.add(PhaseGradientState(self.phase_bitsize))
         else:
             phase_gradient = soqs.pop("phase_grad")
-        gates = self.gates_from_tensors()
+        gates = self._gates_from_tensors()
         input_qubits = bb.split(input_state)
         for i in list(range(self.state_bitsize))[::(1-2*self.uncompute)]:
             gate_size = (len(gates[i])-1).bit_length()
@@ -56,12 +56,12 @@ class PrepareMPS (Bloq):
         return {"input_state": input_state} | soqs
     
     @staticmethod
-    def fill_gate (gate: ArrayLike) -> ArrayLike:
+    def _fill_gate (gate: ArrayLike) -> ArrayLike:
         ker = scp.linalg.null_space(gate.T.conj())
         return np.hstack((gate, ker))
 
     @staticmethod
-    def revert_dims (M: ArrayLike, dims: Tuple[int,...]):
+    def _revert_dims (M: ArrayLike, dims: Tuple[int,...]):
         for d in dims:
             shape = M.shape
             wires = (shape[d]-1).bit_length()
@@ -70,17 +70,23 @@ class PrepareMPS (Bloq):
             M = M.reshape(divided).transpose(reorder).reshape(shape)
         return M
 
-    def gates_from_tensors (self) -> Tuple[ArrayLike,...]:
+    def _gates_from_tensors (self) -> Tuple[ArrayLike,...]:
         bitsize = len(self.tensors)
         gates = []
         if len(self.tensors) > 1:
-            gates.append(PrepareMPS.fill_gate(np.array(self.tensors[0]).T.reshape((-1,1))))
+            gates.append(PrepareMPS._fill_gate(np.array(self.tensors[0]).T.reshape((-1,1))))
         for i in range(1,bitsize-1):
-            tensor = PrepareMPS.revert_dims(np.array(self.tensors[i]),[1]).T
-            gates.append(PrepareMPS.revert_dims(self.fill_gate(tensor.reshape((-1,tensor.shape[2]))),[1]))
-        gates.append(PrepareMPS.fill_gate(np.array(self.tensors[-1]).T.reshape((2,-1))))
+            tensor = PrepareMPS._revert_dims(np.array(self.tensors[i]),[1]).T
+            gates.append(PrepareMPS._revert_dims(self._fill_gate(tensor.reshape((-1,tensor.shape[2]))),[1]))
+        gates.append(PrepareMPS._fill_gate(np.array(self.tensors[-1]).T.reshape((2,-1))))
         return gates
     
+    @staticmethod
+    def _tensor_to_tuple (T: ArrayLike) -> Tuple:
+        if len(T.shape) == 1:
+            return tuple(T)
+        return tuple(map(PrepareMPS._tensor_to_tuple, T))
+
     @staticmethod
     def _extract_tensors (mps: MatrixProductState) -> Tuple[ArrayLike,...]:
         r""" Extracts the tensors with the desired index order.
@@ -89,11 +95,13 @@ class PrepareMPS (Bloq):
           [bond_{i-1}, bond_i, physical_i] for the internal sites
           [bond_{n-2}, physical_{n-1}] for the last site
         """
+        # compute the index reordering (transposition) necessary to set the tensor in the correct
+        # format
         virt_inds = mps.inner_inds()
         phys_inds = mps.outer_inds()
         sites = len(phys_inds)
         if sites == 1:
-            return [mps[0].data]
+            return [PrepareMPS._tensor_to_tuple(mps[0].data)]
         corr_inds = [(virt_inds[0], phys_inds[0])] +\
                     [(virt_inds[i-1], virt_inds[i], phys_inds[i]) for i in range(1,sites-1)] +\
                     [(virt_inds[sites-2], phys_inds[sites-1])]
@@ -101,15 +109,16 @@ class PrepareMPS (Bloq):
         for i in range(sites):
             transpositions.append([mps[i].inds.index(ind) for ind in corr_inds[i]])
         # for each site, get its coefficient tensor reordered in the correct format
-        return [np.transpose(site.data, transp) for site, transp in zip(mps, transpositions)]
+        reordered = [np.transpose(site.data, transp) for site, transp in zip(mps, transpositions)]
+        return [PrepareMPS._tensor_to_tuple(t) for t in reordered]
 
     
     @staticmethod
-    def from_quimb_mps (mps: MatrixProductState, phase_bitsize: int, uncompute: bool = False) -> PrepareMPS:
+    def from_quimb_mps (mps: MatrixProductState, **args) -> PrepareMPS:
+        r"""Constructs a MPS preparation bloq from a Quimb MPS object.
+        Arguments are a Quimb MatrixProductState object and all the others that the default
+        constructor of PrepareMPS receives, except for tensors.
+        """
         mps.compress()
         tensors = PrepareMPS._extract_tensors(mps)
-        tensors[0] = tuple([tuple(l) for l in tensors[0]])
-        for i in range(1,len(tensors)-1):
-            tensors[i] = tuple([tuple([tuple(i) for i in l]) for l in tensors[i]])
-        tensors[-1] = tuple([tuple(l) for l in tensors[-1]])
-        return PrepareMPS(tensors=tuple(tensors), phase_bitsize=phase_bitsize, uncompute=uncompute)
+        return PrepareMPS(tensors=tuple(tensors), **args)
