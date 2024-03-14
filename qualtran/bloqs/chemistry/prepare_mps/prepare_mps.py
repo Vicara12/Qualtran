@@ -87,7 +87,7 @@ class PrepareMPS (Bloq):
         return {"input_state": input_state} | soqs
 
     @staticmethod
-    def _revert_dims (M: ArrayLike, dims: Tuple[int,...]):
+    def _revert_dims (M: ArrayLike, dims: Tuple[int,...]) -> ArrayLike:
         r""" Transposes a single dimension of a tensor.
         For example, in a tensor of shape (4,8,16) reverting the dimension 1 is equivalent to first
         splitting the dimension 1 into subspaces of size 2, which results in a new shape of
