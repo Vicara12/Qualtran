@@ -409,6 +409,15 @@ class RotationTree:
         angles = np.array([np.angle(c) for c in state])
         # flip angle if uncompute
         angles = [(1 - 2 * uncompute) * (a - o) for a, o in zip(angles, offsets)]
+        for qi in range(bitisze):
+            width = 2**(qi+1)
+            for split in range(2**(bitisze-qi-1)):
+                deltas[split*width+width//2] -= deltas[split*width]
+        deltas = [(d%(2*pi))/pi for d in deltas]
+        d_tree = []
+        for qi in range(bitisze):
+            d_layer = [deltas[int(2**(bitisze-qi)*(split + 1/2))] for split in range(2**qi)]
+            d_tree.append(d_layer)
         self.phase_rom_values: List[int] = [
             RotationTree._angle_to_rom_value(a, phase_bitsize) for a in angles
         ]
