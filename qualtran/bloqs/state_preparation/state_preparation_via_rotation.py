@@ -279,7 +279,7 @@ _STATE_PREP_VIA_ROTATIONS_DOC = BloqDocSpec(
 
 
 @attrs.frozen
-class PRGAViaPhaseGradient(Bloq):
+class PrepareQubit(Bloq):
     r"""Array of controlled rotations $Z^{\theta_i/2}$ for a list of angles $\theta$.
 
     It uses phase kickback and thus needs a phase gradient state in order to work. This
@@ -304,7 +304,8 @@ class PRGAViaPhaseGradient(Bloq):
 
     selection_bitsize: int
     phase_bitsize: int
-    rom_values: Tuple[int, ...]
+    amp_rom_values: Tuple[int, ...]
+    ph_rom_values: Tuple[int, ...]
     control_bitsize: int
 
     @property
@@ -312,6 +313,7 @@ class PRGAViaPhaseGradient(Bloq):
         return Signature.build(
             control=self.control_bitsize,
             selection=self.selection_bitsize,
+            qubit=1,
             phase_gradient=self.phase_bitsize,
         )
 
@@ -319,16 +321,18 @@ class PRGAViaPhaseGradient(Bloq):
         """Parameters:
         * control
         * selection (not necessary if selection_bitsize == 0)
+        * qubit
         * phase_gradient
         """
         qrom = QROM(
-            [np.array(self.rom_values)],
+            [np.array(self.amp_rom_values), np.array(self.ph_rom_values)],
             selection_bitsizes=(self.selection_bitsize,),
-            target_bitsizes=(self.phase_bitsize,),
+            target_bitsizes=(self.phase_bitsize,self.phase_bitsize),
             num_controls=self.control_bitsize,
         )
-        # allocate a register to store the rotation angle
+        # allocate a register to store the rotation angles
         soqs["target0_"] = bb.allocate(self.phase_bitsize)
+        soqs["target1_"] = bb.allocate(self.phase_bitsize)
         phase_grad = soqs.pop("phase_gradient")
         # load angles in rot_reg (line 1 of eq (8) in [1])
         soqs = bb.add_d(qrom, **soqs)
@@ -338,11 +342,17 @@ class PRGAViaPhaseGradient(Bloq):
             x=soqs["target0_"],
             phase_grad=phase_grad,
         )
+        soqs["target1_"], phase_grad = bb.add(
+            AddIntoPhaseGrad(self.phase_bitsize, self.phase_bitsize),
+            x=soqs["target1_"],
+            phase_grad=phase_grad,
+        )
         # uncompute angle load in rot_reg to disentangle it from selection register
         # (line 1 of eq (8) in [1])
         soqs = bb.add_d(qrom, **soqs)
         soqs["phase_gradient"] = phase_grad
         bb.free(soqs.pop("target0_"))
+        bb.free(soqs.pop("target1_"))
         return soqs
 
 
