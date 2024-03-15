@@ -73,7 +73,8 @@ References:
 
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Callable
+from typing_extensions import Self
 
 import attrs
 import numpy as np
@@ -279,7 +280,7 @@ _STATE_PREP_VIA_ROTATIONS_DOC = BloqDocSpec(
 
 
 @attrs.frozen
-class PrepareQubit(Bloq):
+class PRGAViaPhaseGradient(Bloq):
     r"""Array of controlled rotations $Z^{\theta_i/2}$ for a list of angles $\theta$.
 
     It uses phase kickback and thus needs a phase gradient state in order to work. This
@@ -304,18 +305,39 @@ class PrepareQubit(Bloq):
 
     selection_bitsize: int
     phase_bitsize: int
-    amp_rom_values: Tuple[int, ...]
-    ph_rom_values: Tuple[int, ...]
-    control_bitsize: int
+    angles: Tuple[Tuple[float,...], ...]
+    # [int, [int, Bloq, Bloq]] -> key = row of angles that it applies to
+    #                             values = (qubit of control to apply the gates to,
+    #                                       gate to apply before the rotation,
+    #                                       gate to apply after the rotation)
+    pre_post_gates: Tuple[int, Tuple[int, Bloq, Bloq]]
+    control_bitsize: int = 0
 
     @property
     def signature(self) -> Signature:
         return Signature.build(
             control=self.control_bitsize,
             selection=self.selection_bitsize,
-            qubit=1,
             phase_gradient=self.phase_bitsize,
         )
+    
+    @property
+    def rom_values(self) -> Tuple[Tuple[int,...], ...]:
+        rv_list = []
+        for angle_list in self.angles:
+            rv_list.append(tuple([self.angle_to_rom_value(a) for a in angle_list]))
+        return tuple(rv_list)
+    
+    @property
+    def pre_post_all(self) -> Tuple[int]:
+        indices = [ind for ind, _ in self.pre_post_gates]
+        pre_post_all = []
+        for i in range(len(self.angles)):
+            if i in indices:
+                pre_post_all.append(self.pre_post_gates[indices.index(i)][1])
+            else:
+                pre_post_all.append((0, None, None))
+        return tuple(pre_post_all)
 
     def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
         """Parameters:
@@ -325,35 +347,52 @@ class PrepareQubit(Bloq):
         * phase_gradient
         """
         qrom = QROM(
-            [np.array(self.amp_rom_values), np.array(self.ph_rom_values)],
+            [np.array(self.rom_values[0]), np.array(self.rom_values[1])],
             selection_bitsizes=(self.selection_bitsize,),
             target_bitsizes=(self.phase_bitsize,self.phase_bitsize),
             num_controls=self.control_bitsize,
         )
         # allocate a register to store the rotation angles
-        soqs["target0_"] = bb.allocate(self.phase_bitsize)
-        soqs["target1_"] = bb.allocate(self.phase_bitsize)
+        for i in range(len(self.rom_values)):
+            soqs[f"target{i}_"] = bb.allocate(self.phase_bitsize)
         phase_grad = soqs.pop("phase_gradient")
         # load angles in rot_reg (line 1 of eq (8) in [1])
         soqs = bb.add_d(qrom, **soqs)
+        adder = AddIntoPhaseGrad(self.phase_bitsize, self.phase_bitsize)
         # phase kickback via phase_grad += rot_reg (line 2 of eq (8) in [1])
-        soqs["target0_"], phase_grad = bb.add(
-            AddIntoPhaseGrad(self.phase_bitsize, self.phase_bitsize),
-            x=soqs["target0_"],
-            phase_grad=phase_grad,
-        )
-        soqs["target1_"], phase_grad = bb.add(
-            AddIntoPhaseGrad(self.phase_bitsize, self.phase_bitsize),
-            x=soqs["target1_"],
-            phase_grad=phase_grad,
-        )
+        for i in range(len(self.rom_values)):
+            phase_grad, soqs = self.apply_ith_rotation(i, bb, adder, phase_grad, **soqs)
         # uncompute angle load in rot_reg to disentangle it from selection register
         # (line 1 of eq (8) in [1])
         soqs = bb.add_d(qrom, **soqs)
         soqs["phase_gradient"] = phase_grad
-        bb.free(soqs.pop("target0_"))
-        bb.free(soqs.pop("target1_"))
+        for i in range(len(self.rom_values)):
+            bb.free(soqs.pop(f"target{i}_"))
         return soqs
+    
+    def apply_ith_rotation(self, i: int, bb: BloqBuilder, adder: Bloq, phase_grad: SoquetT, **soqs: SoquetT):
+        pre_post = self.pre_post_all[i]
+        if pre_post[1] is not None:
+            controls = bb.split(soqs.pop("control"))
+            controls[pre_post[0]] = bb.add(pre_post[1], q=controls[pre_post[0]])
+            soqs["control"] = bb.join(controls)
+        soqs[f"target{i}_"], phase_grad = bb.add(adder, x=soqs[f"target{i}_"], phase_grad=phase_grad)
+        if pre_post[2] is not None:
+            controls = bb.split(soqs.pop("control"))
+            controls[pre_post[0]] = bb.add(pre_post[2], q=controls[pre_post[0]])
+            soqs["control"] = bb.join(controls)
+        return phase_grad, soqs
+
+
+
+    def angle_to_rom_value(self, angle: float) -> int:
+        r"""Given an angle, returns the value to be loaded in ROM.
+
+        Returns the value to be loaded to a QROM to encode the given angle with a certain value of
+        phase_bitsize.
+        """
+        rom_value_decimal = 2**self.phase_bitsize * angle / (2 * np.pi)
+        return round(rom_value_decimal) % (2**self.phase_bitsize)
 
 
 class RotationTree:
@@ -374,7 +413,7 @@ class RotationTree:
         self._calc_phase_rom_values(state, phase_bitsize, uncompute)
 
     def get_rom_vals(self) -> Tuple[List[List[int]], List[int]]:
-        return self.amplitude_rom_values, self.phase_rom_values
+        return self.amplitude_rom_values, self.phase_rom_values, self.global_phase
 
     def _calc_amplitude_angles_and_rv(
         self, state: ArrayLike, phase_bitsize: int, uncompute: bool
@@ -440,13 +479,3 @@ class RotationTree:
         if self.sum_total[idx] == 0:
             return 0
         return self.sum_total[idx << 1] / self.sum_total[idx]
-
-    @staticmethod
-    def _angle_to_rom_value(angle: float, phase_bitsize: int) -> int:
-        r"""Given an angle, returns the value to be loaded in ROM.
-
-        Returns the value to be loaded to a QROM to encode the given angle with a certain value of
-        phase_bitsize.
-        """
-        rom_value_decimal = 2**phase_bitsize * angle / (2 * np.pi)
-        return round(rom_value_decimal) % (2**phase_bitsize)
