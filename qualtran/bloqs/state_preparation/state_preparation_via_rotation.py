@@ -92,6 +92,7 @@ from qualtran import (
 from qualtran.bloqs.basic_gates import XGate
 from qualtran.bloqs.basic_gates.rotation import Rx
 from qualtran.bloqs.qrom import QROM
+from qualtran.bloqs.swap_network import CSwapApprox
 from qualtran.bloqs.rotations.phase_gradient import AddIntoPhaseGrad
 
 
@@ -350,38 +351,43 @@ class PRGAViaPhaseGradient(Bloq):
             [np.array(self.rom_values[0]), np.array(self.rom_values[1])],
             selection_bitsizes=(self.selection_bitsize,),
             target_bitsizes=(self.phase_bitsize,self.phase_bitsize),
-            num_controls=self.control_bitsize,
         )
         # allocate a register to store the rotation angles
         for i in range(len(self.rom_values)):
             soqs[f"target{i}_"] = bb.allocate(self.phase_bitsize)
         phase_grad = soqs.pop("phase_gradient")
+        if self.control_bitsize != 0:
+            control = soqs.pop("control")
         # load angles in rot_reg (line 1 of eq (8) in [1])
         soqs = bb.add_d(qrom, **soqs)
         adder = AddIntoPhaseGrad(self.phase_bitsize, self.phase_bitsize)
         # phase kickback via phase_grad += rot_reg (line 2 of eq (8) in [1])
         for i in range(len(self.rom_values)):
-            phase_grad, soqs = self.apply_ith_rotation(i, bb, adder, phase_grad, **soqs)
+            phase_grad, control, soqs = self.apply_ith_rotation(i, bb, adder, phase_grad, control, **soqs)
         # uncompute angle load in rot_reg to disentangle it from selection register
         # (line 1 of eq (8) in [1])
         soqs = bb.add_d(qrom, **soqs)
         soqs["phase_gradient"] = phase_grad
+        if self.control_bitsize != 0:
+            soqs["control"] = control
         for i in range(len(self.rom_values)):
             bb.free(soqs.pop(f"target{i}_"))
         return soqs
     
-    def apply_ith_rotation(self, i: int, bb: BloqBuilder, adder: Bloq, phase_grad: SoquetT, **soqs: SoquetT):
+    def apply_ith_rotation(self, i: int, bb: BloqBuilder, adder: Bloq, phase_grad: SoquetT, control: SoquetT, **soqs: SoquetT):
         pre_post = self.pre_post_all[i]
+        controls = bb.split(control)
         if pre_post[1] is not None:
-            controls = bb.split(soqs.pop("control"))
             controls[pre_post[0]] = bb.add(pre_post[1], q=controls[pre_post[0]])
-            soqs["control"] = bb.join(controls)
+        buffer = bb.allocate(self.phase_bitsize)
+        controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(CSwapApprox(self.phase_bitsize), ctrl=controls[pre_post[0]],x=soqs[f"target{i}_"], y=buffer)
         soqs[f"target{i}_"], phase_grad = bb.add(adder, x=soqs[f"target{i}_"], phase_grad=phase_grad)
+        controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(CSwapApprox(self.phase_bitsize), ctrl=controls[pre_post[0]],x=soqs[f"target{i}_"], y=buffer)
         if pre_post[2] is not None:
-            controls = bb.split(soqs.pop("control"))
             controls[pre_post[0]] = bb.add(pre_post[2], q=controls[pre_post[0]])
-            soqs["control"] = bb.join(controls)
-        return phase_grad, soqs
+        control = bb.join(controls)
+        bb.free(buffer)
+        return phase_grad, control, soqs
 
 
 
