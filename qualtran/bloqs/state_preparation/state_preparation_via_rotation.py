@@ -381,15 +381,13 @@ class PRGAViaPhaseGradient(Bloq):
             controls[pre_post[0]] = bb.add(pre_post[1], q=controls[pre_post[0]])
         buffer = bb.allocate(self.phase_bitsize)
         controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(CSwapApprox(self.phase_bitsize), ctrl=controls[pre_post[0]],x=soqs[f"target{i}_"], y=buffer)
-        soqs[f"target{i}_"], phase_grad = bb.add(adder, x=soqs[f"target{i}_"], phase_grad=phase_grad)
+        buffer, phase_grad = bb.add(adder, x=buffer, phase_grad=phase_grad)
         controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(CSwapApprox(self.phase_bitsize), ctrl=controls[pre_post[0]],x=soqs[f"target{i}_"], y=buffer)
         if pre_post[2] is not None:
             controls[pre_post[0]] = bb.add(pre_post[2], q=controls[pre_post[0]])
         control = bb.join(controls)
         bb.free(buffer)
         return phase_grad, control, soqs
-
-
 
     def angle_to_rom_value(self, angle: float) -> int:
         r"""Given an angle, returns the value to be loaded in ROM.
