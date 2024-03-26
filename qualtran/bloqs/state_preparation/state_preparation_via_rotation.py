@@ -73,12 +73,13 @@ References:
 
 """
 
-from typing import Dict, List, Tuple, Callable
-from typing_extensions import Self
+from typing import Callable, Dict, List, Tuple
 
 import attrs
 import numpy as np
 from numpy.typing import ArrayLike
+from typing_extensions import Self
+import copy
 
 from qualtran import (
     Bloq,
@@ -92,8 +93,8 @@ from qualtran import (
 from qualtran.bloqs.basic_gates import XGate
 from qualtran.bloqs.basic_gates.rotation import Rx
 from qualtran.bloqs.qrom import QROM
-from qualtran.bloqs.swap_network import CSwapApprox
 from qualtran.bloqs.rotations.phase_gradient import AddIntoPhaseGrad
+from qualtran.bloqs.swap_network import CSwapApprox
 
 
 @attrs.frozen
@@ -145,7 +146,7 @@ class StatePreparationViaRotations(GateWithRegisters):
         return Signature.build(
             prepare_control=self.control_bitsize,
             target_state=self.state_bitsize,
-            phase_gradient=self.phase_bitsize,
+            phase_gradient=self.phase_bitsize
         )
 
     def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
@@ -155,29 +156,47 @@ class StatePreparationViaRotations(GateWithRegisters):
         * phase_gradient: phase gradient state (will be left unaffected)
         """
         rotation_tree = RotationTree(self.state_coefficients, self.uncompute)
-        amp_angles, phase_angles, global_phase = rotation_tree.get_angles()
-        for i in list(range(0, self.state_bitsize))[::(1-2*self.uncompute)]:
-            soqs = self._prepare_ith_qubit(bb, i, amp_angles[i], phase_angles[i], global_phase, **soqs)
+        amp_angles, phase_angles, _ = rotation_tree.get_angles()
+        amp_reg = bb.allocate(self.phase_bitsize)
+        ph_reg = bb.allocate(self.phase_bitsize)
+        prev = ()
+        for i in list(range(0, self.state_bitsize))[:: (1 - 2 * self.uncompute)]:
+            soqs, prev, amp_reg, ph_reg = self._prepare_ith_qubit(
+                bb, i, amp_angles[i], phase_angles[i], prev, amp_reg, ph_reg, **soqs
+            )
+        bb.free(amp_reg)
+        bb.free(ph_reg)
         return soqs
-    
-    def _prepare_ith_qubit(self, bb: BloqBuilder, i:int, amp_angles: Tuple[float,...], ph_angles: Tuple[float,...], gl_phase: float, **soqs: SoquetT):
+
+    def _prepare_ith_qubit(
+        self,
+        bb: BloqBuilder,
+        i: int,
+        amp_angles: Tuple[float, ...],
+        ph_angles: Tuple[float, ...],
+        prev: Tuple[Tuple[int, ...], ...],
+        amp_reg: SoquetT,
+        ph_reg: SoquetT,
+        **soqs: SoquetT,
+    ):
         # if preparing the first qubit, load global phase, amplitudes and relative phase
-        if i == 0:
-            if self.uncompute:
-                angles = (ph_angles, amp_angles, (gl_phase,))
-                pre_post_gates = {1:(-1, Rx(angle=np.pi/2), Rx(angle=-np.pi/2)), 2:(-1, XGate(), XGate())}
-            else:
-                angles = ((gl_phase,),amp_angles, ph_angles)
-                pre_post_gates = {0:(-1, XGate(), XGate()), 1:(-1, Rx(angle=np.pi/2), Rx(angle=-np.pi/2))}
+        if self.uncompute:
+            angles = (ph_angles, amp_angles)
+            pre_post_gates = {1: (-1, Rx(angle=np.pi / 2), Rx(angle=-np.pi / 2))}
         else:
-            if self.uncompute:
-                angles = (ph_angles, amp_angles)
-                pre_post_gates = {1:(-1, Rx(angle=np.pi/2), Rx(angle=-np.pi/2))}
-            else:
-                angles = (amp_angles, ph_angles)
-                pre_post_gates = {0:(-1, Rx(angle=np.pi/2), Rx(angle=-np.pi/2))}
-        prga = PRGAViaPhaseGradient(i, self.phase_bitsize, angles, tuple(pre_post_gates.items()), self.control_bitsize+1)
-        prga_soqs = {}
+            angles = (amp_angles, ph_angles)
+            pre_post_gates = {0: (-1, Rx(angle=np.pi / 2), Rx(angle=-np.pi / 2))}
+        prga = PRGAViaPhaseGradient(
+            i,
+            self.phase_bitsize,
+            angles,
+            tuple(pre_post_gates.items()),
+            self.control_bitsize + 1,
+            first=(i == 0),
+            last=(i == self.state_bitsize - 1),
+            prev_vals=prev
+        )
+        prga_soqs = {"target0_": amp_reg, "target1_":ph_reg}
         # prepare soquets for PRGA
         state_qubits = bb.split(soqs.pop("target_state"))
         if self.control_bitsize == 0:
@@ -203,7 +222,7 @@ class StatePreparationViaRotations(GateWithRegisters):
         if i != 0:
             state_qubits[:i] = bb.split(prga_soqs.pop("selection"))
         soqs["target_state"] = bb.join(state_qubits)
-        return soqs
+        return soqs, prga.effective_rom_values, prga_soqs.pop("target0_"), prga_soqs.pop("target1_")
 
 
 @bloq_example
@@ -257,29 +276,45 @@ class PRGAViaPhaseGradient(Bloq):
 
     selection_bitsize: int
     phase_bitsize: int
-    angles: Tuple[Tuple[float,...], ...]
+    angles: Tuple[Tuple[float, ...], ...]
     # [int, [int, Bloq, Bloq]] -> key = row of angles that it applies to
     #                             values = (qubit of control to apply the gates to,
     #                                       gate to apply before the rotation,
     #                                       gate to apply after the rotation)
     pre_post_gates: Tuple[int, Tuple[int, Bloq, Bloq]]
     control_bitsize: int = 0
+    first: bool = False
+    last: bool = False
+    prev_vals: Tuple[Tuple[int, ...], ...] = ()
 
     @property
     def signature(self) -> Signature:
         return Signature.build(
             control=self.control_bitsize,
             selection=self.selection_bitsize,
+            **self.target_soqs,
             phase_gradient=self.phase_bitsize,
         )
     
     @property
-    def rom_values(self) -> Tuple[Tuple[int,...], ...]:
-        rv_list = []
+    def target_soqs(self) -> Dict[str, int]:
+        return dict([(f"target{i}_", self.phase_bitsize) for i in range(len(self.angles))])
+
+    @property
+    def effective_rom_values (self) -> Tuple[Tuple[int, ...], ...]:
+        effective_rv = []
         for angle_list in self.angles:
-            rv_list.append(tuple([self.angle_to_rom_value(a) for a in angle_list]))
+            effective_rv.append(tuple([self.angle_to_rom_value(a) for a in angle_list]))
+        return tuple(effective_rv)
+
+    @property
+    def rom_values(self) -> Tuple[Tuple[int, ...], ...]:
+        rv_list = list(self.effective_rom_values)
+        if not self.first:
+            for i, rvs in enumerate(rv_list):
+                rv_list[i] = tuple([rv ^ self.prev_vals[i][j // 2] for j, rv in enumerate(rvs)])
         return tuple(rv_list)
-    
+
     @property
     def pre_post_all(self) -> Tuple[int]:
         indices = [ind for ind, _ in self.pre_post_gates]
@@ -296,16 +331,14 @@ class PRGAViaPhaseGradient(Bloq):
         * control
         * selection (not necessary if selection_bitsize == 0)
         * qubit
+        * target0_ ... targetN_ angle registers
         * phase_gradient
         """
         qrom = QROM(
             [np.array(rv) for rv in self.rom_values],
             selection_bitsizes=(self.selection_bitsize,),
-            target_bitsizes=(self.phase_bitsize,)*len(self.rom_values),
+            target_bitsizes=(self.phase_bitsize,) * len(self.rom_values),
         )
-        # allocate a register to store the rotation angles
-        for i in range(len(self.rom_values)):
-            soqs[f"target{i}_"] = bb.allocate(self.phase_bitsize)
         phase_grad = soqs.pop("phase_gradient")
         if self.control_bitsize != 0:
             control = soqs.pop("control")
@@ -314,26 +347,50 @@ class PRGAViaPhaseGradient(Bloq):
         adder = AddIntoPhaseGrad(self.phase_bitsize, self.phase_bitsize)
         # phase kickback via phase_grad += rot_reg (line 2 of eq (8) in [1])
         for i in range(len(self.rom_values)):
-            phase_grad, control, soqs = self.apply_ith_rotation(i, bb, adder, phase_grad, control, **soqs)
+            phase_grad, control, soqs = self.apply_ith_rotation(
+                i, bb, adder, phase_grad, control, **soqs
+            )
         # uncompute angle load in rot_reg to disentangle it from selection register
         # (line 1 of eq (8) in [1])
-        soqs = bb.add_d(qrom, **soqs)
+        if self.last:
+            qrom = QROM(
+                [np.array(rv) for rv in self.effective_rom_values],
+                selection_bitsizes=(self.selection_bitsize,),
+                target_bitsizes=(self.phase_bitsize,) * len(self.rom_values),
+            )
+            soqs = bb.add_d(qrom, **soqs)
         soqs["phase_gradient"] = phase_grad
         if self.control_bitsize != 0:
             soqs["control"] = control
-        for i in range(len(self.rom_values)):
-            bb.free(soqs.pop(f"target{i}_"))
         return soqs
-    
-    def apply_ith_rotation(self, i: int, bb: BloqBuilder, adder: Bloq, phase_grad: SoquetT, control: SoquetT, **soqs: SoquetT):
+
+    def apply_ith_rotation(
+        self,
+        i: int,
+        bb: BloqBuilder,
+        adder: Bloq,
+        phase_grad: SoquetT,
+        control: SoquetT,
+        **soqs: SoquetT,
+    ):
         pre_post = self.pre_post_all[i]
         controls = bb.split(control)
         if pre_post[1] is not None:
             controls[pre_post[0]] = bb.add(pre_post[1], q=controls[pre_post[0]])
         buffer = bb.allocate(self.phase_bitsize)
-        controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(CSwapApprox(self.phase_bitsize), ctrl=controls[pre_post[0]],x=soqs[f"target{i}_"], y=buffer)
+        controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(
+            CSwapApprox(self.phase_bitsize),
+            ctrl=controls[pre_post[0]],
+            x=soqs[f"target{i}_"],
+            y=buffer,
+        )
         buffer, phase_grad = bb.add(adder, x=buffer, phase_grad=phase_grad)
-        controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(CSwapApprox(self.phase_bitsize), ctrl=controls[pre_post[0]],x=soqs[f"target{i}_"], y=buffer)
+        controls[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(
+            CSwapApprox(self.phase_bitsize),
+            ctrl=controls[pre_post[0]],
+            x=soqs[f"target{i}_"],
+            y=buffer,
+        )
         if pre_post[2] is not None:
             controls[pre_post[0]] = bb.add(pre_post[2], q=controls[pre_post[0]])
         control = bb.join(controls)
@@ -370,9 +427,7 @@ class RotationTree:
     def get_angles(self) -> Tuple[List[List[int]], List[int]]:
         return tuple(self.amplitude_angles), tuple(self.phase_angles), self.global_phase
 
-    def _calc_amplitude_angles(
-        self, state: ArrayLike, uncompute: bool
-    ) -> None:
+    def _calc_amplitude_angles(self, state: ArrayLike, uncompute: bool) -> None:
         r"""Gives a list of the ROM values to be loaded for preparing the amplitudes of a state.
 
         The ith element of the returned list is another list with the rom values to be loaded when
@@ -391,16 +446,16 @@ class RotationTree:
                 angle = self._angle_0(node)
                 if uncompute:
                     angle = 2 * np.pi - angle
-                angles_this_layer.append(angle%(2*np.pi))
+                angles_this_layer.append(angle % (2 * np.pi))
             self.amplitude_angles.append(tuple(angles_this_layer))
-    
-    def phase_offsets (self) -> Tuple[float,...]:
+
+    def phase_offsets(self) -> Tuple[float, ...]:
         sites = len(self.amplitude_angles)
         offs = np.zeros(2**sites)
         for i in range(sites):
-            rang = 2**(sites-i)
+            rang = 2 ** (sites - i)
             for block in range(2**i):
-                offs[rang*block:rang*(block+1)] += self.amplitude_angles[i][block]/2
+                offs[rang * block : rang * (block + 1)] += self.amplitude_angles[i][block] / 2
         return offs
 
     def _calc_phase_angles(self, state: ArrayLike, uncompute: bool) -> None:
@@ -414,15 +469,17 @@ class RotationTree:
         angles = np.array([np.angle(c) for c in state])
         # flip angle if uncompute
         deltas = [(1 - 2 * uncompute) * (a - o) for a, o in zip(angles, offsets)]
-        bitsize = (len(state)-1).bit_length()
+        bitsize = (len(state) - 1).bit_length()
         for qi in range(bitsize):
-            width = 2**(qi+1)
-            for split in range(2**(bitsize-qi-1)):
-                deltas[split*width+width//2] -= deltas[split*width]
-        deltas = [(d%(2*np.pi)) for d in deltas]
+            width = 2 ** (qi + 1)
+            for split in range(2 ** (bitsize - qi - 1)):
+                deltas[split * width + width // 2] -= deltas[split * width]
+        deltas = [(d % (2 * np.pi)) for d in deltas]
         self.phase_angles = []
         for qi in range(bitsize):
-            d_layer = [deltas[int(2**(bitsize-qi)*(split + 1/2))] for split in range(2**qi)]
+            d_layer = [
+                deltas[int(2 ** (bitsize - qi) * (split + 1 / 2))] for split in range(2**qi)
+            ]
             self.phase_angles.append(tuple(d_layer))
         self.global_phase = deltas[0]
 
