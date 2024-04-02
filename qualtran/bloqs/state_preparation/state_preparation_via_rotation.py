@@ -193,7 +193,8 @@ class StatePreparationViaRotations(GateWithRegisters):
             tuple(pre_post_gates.items()),
             self.control_bitsize + 1,
             first=(i == 0),
-            last=(i == self.state_bitsize - 1),
+            # last=(i == self.state_bitsize - 1),
+            last = False,
             prev_vals=prev
         )
         prga_soqs = {"target0_": amp_reg, "target1_":ph_reg}
