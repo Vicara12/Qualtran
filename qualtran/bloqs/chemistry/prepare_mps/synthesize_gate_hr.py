@@ -52,11 +52,11 @@ class SynthesizeGateHR(Bloq):
         soqs["amp_reg"] = bb.allocate(self.phase_bitsize)
         soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
         for i, ui in self.cols:
-            amps, phases, _ = RotationTree(ui, False).get_angles()
-            amps_t, phases_t, _ = RotationTree(ui, True).get_angles()
-            # soqs = self._r_ui_t(bb, amps_t, phases_t, **soqs)
+            amps, phases, gl = RotationTree(ui, False).get_angles()
+            amps_t, phases_t, gl_t = RotationTree(ui, True).get_angles()
+            # soqs = self._r_ui_t(bb, amps_t, phases_t, gl_t, **soqs)
             # soqs["ra"], soqs["state"] = self._reflection_core(bb, i, soqs["ra"], soqs["state"])
-            soqs = self._r_ui(bb, amps, phases, **soqs)
+            soqs = self._r_ui(bb, amps, phases, gl, **soqs)
         bb.free(soqs.pop("ph_reg"))
         bb.free(soqs.pop("amp_reg"))
 
@@ -85,7 +85,7 @@ class SynthesizeGateHR(Bloq):
         soqs["state"] = bb.join(state)
         return soqs
 
-    def _r_ui(self, bb: BloqBuilder, amps: Tuple[Tuple[float,...],...], phases: Tuple[Tuple[float,...],...], **soqs: SoquetT) -> Dict[str, SoquetT]:
+    def _r_ui(self, bb: BloqBuilder, amps: Tuple[Tuple[float,...],...], phases: Tuple[Tuple[float,...],...], global_ph: float, **soqs: SoquetT) -> Dict[str, SoquetT]:
         r"""Registers are:
             * ra: reflection ancilla
             * state: input qubits
@@ -96,6 +96,7 @@ class SynthesizeGateHR(Bloq):
         print(amps, phases)
         pre_post_gates = ((0, (-1, Rx(angle=np.pi / 2), Rx(angle=-np.pi / 2))),)
         qubits = bb.split(soqs.pop("state"))
+        soqs = self._state_global_phase(bb, global_ph, **soqs)
         soqs_qrom = {"target0_": soqs.pop("amp_reg"), "target1_": soqs.pop("ph_reg")}
         for i, (amp_qubit, ph_qubit) in enumerate(zip(amps, phases)):
             if i == 0:
@@ -123,6 +124,15 @@ class SynthesizeGateHR(Bloq):
         if i != 0:
             qubits[:-1] = bb.split(soqs_qrom.pop("selection"))
         return {"state": bb.join(qubits), "amp_reg": soqs_qrom.pop("target0_"), "ph_reg": soqs_qrom.pop("target1_")} | soqs
+    
+    def _state_global_phase (self, bb: BloqBuilder, global_phase: int, **soqs: SoquetT) -> Dict[str, SoquetT]:
+        rv = DifferentialQROM.angle_to_rom_value(self.phase_bitsize, global_phase)
+        qrom = QROM([np.array([rv])], selection_bitsizes=(0,), target_bitsizes=(self.phase_bitsize,))
+        adder = RotationViaAddition((), 1, self.phase_bitsize, 1)
+        soqs["ph_reg"] = bb.add(qrom, target0_=soqs["ph_reg"])
+        soqs["ra"], soqs["ph_reg"], soqs["phase_grad"] = bb.add(adder, control=soqs["ra"], target0_=soqs["ph_reg"], phase_grad=soqs["phase_grad"])
+        soqs["ph_reg"] = bb.add(qrom, target0_=soqs["ph_reg"])
+        return soqs
     
     def _reflection_core(
         self, bb: BloqBuilder, i: int, ra: SoquetT, state: List[SoquetT]
@@ -204,13 +214,16 @@ class DifferentialQROM(Bloq):
         return tuple(rv)
 
     def _angle_to_rom_value(self, angle: float) -> int:
+        return DifferentialQROM.angle_to_rom_value(self.target_bitsize, angle)
+
+    def angle_to_rom_value(phase_bitsize, angle: float) -> int:
         r"""Given an angle, returns the value to be loaded in ROM.
 
         Returns the value to be loaded to a QROM to encode the given angle with a certain value of
         phase_bitsize.
         """
-        rom_value_decimal = 2**self.target_bitsize * angle / (2 * np.pi)
-        return round(rom_value_decimal) % (2**self.target_bitsize)
+        rom_value_decimal = 2**phase_bitsize * angle / (2 * np.pi)
+        return round(rom_value_decimal) % (2**phase_bitsize)
 
     def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
         print(f"loading: {self.rom_values}")
