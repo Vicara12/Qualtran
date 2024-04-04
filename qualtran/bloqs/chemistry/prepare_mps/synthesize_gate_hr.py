@@ -7,11 +7,14 @@ import numpy as np
 from qualtran import Bloq, BloqBuilder, Signature, SoquetT
 from qualtran.bloqs.basic_gates import CNOT, Hadamard, XGate, ZGate
 from qualtran.bloqs.mcmt.multi_control_multi_target_pauli import MultiControlPauli
+from qualtran.bloqs.mcmt.and_bloq import And
 from qualtran.bloqs.qrom import QROM
 from qualtran.bloqs.rotations.phase_gradient import AddIntoPhaseGrad, PhaseGradientState
-from qualtran.bloqs.swap_network import CSwapApprox
+from qualtran.bloqs.basic_gates.swap import CSwap
 from qualtran.bloqs.state_preparation.state_preparation_via_rotation import RotationTree
 from qualtran.bloqs.basic_gates.rotation import Rx
+
+from qualtran.drawing import show_bloq
 
 
 @attrs.frozen
@@ -39,6 +42,7 @@ class SynthesizeGateHR(Bloq):
     ) -> Dict[str, SoquetT]:
         if self.internal_refl_ancilla:
             soqs["ra"] = bb.allocate(1)
+            soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
         else:
             soqs["ra"] = soqs.pop("reflection_ancilla")
         if self.internal_phase_grad:
@@ -59,7 +63,6 @@ class SynthesizeGateHR(Bloq):
         if self.internal_phase_grad:
             bb.add(PhaseGradientState(self.phase_bitsize).adjoint(), phase_grad=soqs.pop("phase_grad"))
         if self.internal_refl_ancilla:
-            soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
             bb.free(soqs.pop("ra"))
         else:
             soqs["reflection_ancilla"] = soqs.pop("ra")
@@ -252,7 +255,6 @@ class RotationViaAddition(Bloq):
         return tuple(pre_post_all)
 
     def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
-        print(self.pre_post_all)
         adder = AddIntoPhaseGrad(self.target_bitsize, self.target_bitsize)
         for i in range(self.num_angle_soqs):
             soqs = self.apply_ith_rotation(i, bb, adder, **soqs)
@@ -270,21 +272,26 @@ class RotationViaAddition(Bloq):
         if pre_post[1] is not None:
             control[pre_post[0]] = bb.add(pre_post[1], q=control[pre_post[0]])
         buffer = bb.allocate(self.target_bitsize)
-        control[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(
-            CSwapApprox(self.target_bitsize),
-            ctrl=control[pre_post[0]],
-            x=soqs[f"target{i}_"],
-            y=buffer,
-        )
+        control = bb.join(control)
+        control, soqs[f"target{i}_"], buffer = self.controlled_swap(bb, control, soqs[f"target{i}_"], buffer)
         buffer, soqs["phase_grad"] = bb.add(adder, x=buffer, phase_grad=soqs["phase_grad"])
-        control[pre_post[0]], soqs[f"target{i}_"], buffer = bb.add(
-            CSwapApprox(self.target_bitsize),
-            ctrl=control[pre_post[0]],
-            x=soqs[f"target{i}_"],
-            y=buffer,
-        )
+        control, soqs[f"target{i}_"], buffer = self.controlled_swap(bb, control, soqs[f"target{i}_"], buffer)
+        control = bb.split(control)
         if pre_post[2] is not None:
             control[pre_post[0]] = bb.add(pre_post[2], q=control[pre_post[0]])
         soqs["control"] = bb.join(control)
         bb.free(buffer)
         return soqs
+    
+    def controlled_swap(self, bb: BloqBuilder, ctrl: SoquetT, a: SoquetT, b: SoquetT) -> Tuple[SoquetT, SoquetT, SoquetT]:
+        if self.num_controls == 1:
+            ctrl, a, b = bb.add(CSwap(self.target_bitsize), ctrl=ctrl, x=a, y=b)
+        elif self.num_controls == 2:
+            ctrl = bb.split(ctrl)
+            ctrl, ctrl_ = bb.add(And(), ctrl=ctrl)
+            ctrl_, a, b = bb.add(CSwap(self.target_bitsize), ctrl=ctrl_, x=a, y=b)
+            ctrl = bb.add(And().adjoint(), ctrl=ctrl, target=ctrl_)
+            ctrl = bb.join(ctrl)
+        else:
+            raise Exception("not implemented")
+        return ctrl, a, b
