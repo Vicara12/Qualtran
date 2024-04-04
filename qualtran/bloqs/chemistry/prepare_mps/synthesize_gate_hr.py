@@ -108,7 +108,7 @@ class SynthesizeGateHR(Bloq):
                 soqs_qrom["selection"] = bb.join(qubits[:i])
             soqs_qrom = bb.add_d(qrom, **soqs_qrom)
             if i != 0:
-                qubits[:i] = soqs_qrom.pop("selection")
+                qubits[:i] = bb.split(soqs_qrom.pop("selection"))
             control = bb.join(np.array([soqs.pop("ra"), qubits[i]]))
             control, soqs_qrom["target0_"], soqs_qrom["target1_"], soqs["phase_grad"] = bb.add(
                 adders, control=control, target0_=soqs_qrom["target0_"], target1_=soqs_qrom["target1_"], phase_grad=soqs["phase_grad"]
@@ -121,7 +121,7 @@ class SynthesizeGateHR(Bloq):
             soqs_qrom["selection"] = bb.join(qubits[:-1])
         soqs_qrom = bb.add_d(qrom, **soqs_qrom)
         if i != 0:
-            qubits[:-1] = soqs_qrom.pop("selection")
+            qubits[:-1] = bb.split(soqs_qrom.pop("selection"))
         return {"state": bb.join(qubits), "amp_reg": soqs_qrom.pop("target0_"), "ph_reg": soqs_qrom.pop("target1_")} | soqs
     
     def _reflection_core(
