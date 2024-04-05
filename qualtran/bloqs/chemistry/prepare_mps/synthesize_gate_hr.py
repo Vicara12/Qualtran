@@ -19,7 +19,7 @@ from qualtran.drawing import show_bloq
 @attrs.frozen
 class SynthesizeGateViaHR(Bloq):
 
-    cols: Tuple[Tuple[int, Tuple[complex, ...]], ...]
+    gate_cols: Tuple[Tuple[int, Tuple[complex, ...]], ...]
     phase_bitsize: int
     internal_phase_grad: bool = False
     internal_refl_ancilla: bool = True
@@ -27,7 +27,7 @@ class SynthesizeGateViaHR(Bloq):
 
     @property
     def gate_bitsize(self):
-        return (len(self.cols[0][1]) - 1).bit_length()
+        return (len(self.gate_cols[0][1]) - 1).bit_length()
 
     @property
     def signature(self) -> Signature:
@@ -51,7 +51,7 @@ class SynthesizeGateViaHR(Bloq):
         amps_left = (0,)
         phases_pre = (0,)
         phases_left = (0,)
-        for index, (i, ui) in enumerate(self.cols):
+        for index, (i, ui) in enumerate(self.gate_cols):
             amps, phases, gl = RotationTree(ui, False).get_angles()
             amps_t, phases_t, gl_t = RotationTree(ui, True).get_angles()
             if index != 0 and self.optimize:
@@ -83,7 +83,7 @@ class SynthesizeGateViaHR(Bloq):
                     )
             soqs = self._r_ui_t(bb, amps_t, phases_t, gl_t, index == 0 or not self.optimize, **soqs)
             soqs["ra"], soqs["state"] = self._reflection_core(bb, i, soqs["ra"], soqs["state"])
-            soqs = self._r_ui(bb, amps, phases, gl, index == len(self.cols) - 1 or not self.optimize, **soqs)
+            soqs = self._r_ui(bb, amps, phases, gl, index == len(self.gate_cols) - 1 or not self.optimize, **soqs)
             if self.gate_bitsize > 1:
                 amps_pre = amps[-2]
                 phases_pre = phases[-2]
