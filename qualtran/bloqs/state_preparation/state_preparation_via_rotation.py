@@ -73,13 +73,13 @@ References:
 
 """
 
+import copy
 from typing import Callable, Dict, List, Tuple
 
 import attrs
 import numpy as np
 from numpy.typing import ArrayLike
 from typing_extensions import Self
-import copy
 
 from qualtran import (
     Bloq,
@@ -146,7 +146,7 @@ class StatePreparationViaRotations(GateWithRegisters):
         return Signature.build(
             prepare_control=self.control_bitsize,
             target_state=self.state_bitsize,
-            phase_gradient=self.phase_bitsize
+            phase_gradient=self.phase_bitsize,
         )
 
     def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
@@ -194,10 +194,10 @@ class StatePreparationViaRotations(GateWithRegisters):
             self.control_bitsize + 1,
             first=(i == 0),
             # last=(i == self.state_bitsize - 1),
-            last = False,
-            prev_vals=prev
+            last=False,
+            prev_vals=prev,
         )
-        prga_soqs = {"target0_": amp_reg, "target1_":ph_reg}
+        prga_soqs = {"target0_": amp_reg, "target1_": ph_reg}
         # prepare soquets for PRGA
         state_qubits = bb.split(soqs.pop("target_state"))
         if self.control_bitsize == 0:
@@ -296,13 +296,13 @@ class PRGAViaPhaseGradient(Bloq):
             **self.target_soqs,
             phase_gradient=self.phase_bitsize,
         )
-    
+
     @property
     def target_soqs(self) -> Dict[str, int]:
         return dict([(f"target{i}_", self.phase_bitsize) for i in range(len(self.angles))])
 
     @property
-    def effective_rom_values (self) -> Tuple[Tuple[int, ...], ...]:
+    def effective_rom_values(self) -> Tuple[Tuple[int, ...], ...]:
         effective_rv = []
         for angle_list in self.angles:
             effective_rv.append(tuple([self.angle_to_rom_value(a) for a in angle_list]))
@@ -450,13 +450,17 @@ class RotationTree:
                 angles_this_layer.append(angle % (2 * np.pi))
             self.amplitude_angles.append(tuple(angles_this_layer))
 
-    def phase_offsets(self) -> Tuple[float, ...]:
+    def phase_offsets(self, uncompute) -> Tuple[float, ...]:
         sites = len(self.amplitude_angles)
         offs = np.zeros(2**sites)
         for i in range(sites):
             rang = 2 ** (sites - i)
             for block in range(2**i):
-                offs[rang * block : rang * (block + 1)] += self.amplitude_angles[i][block] / 2
+                if uncompute:
+                    angle = (2*np.pi + self.amplitude_angles[i][block]) / 2
+                else:
+                    angle = self.amplitude_angles[i][block] / 2
+                offs[rang * block : rang * (block + 1)] += angle
         return offs
 
     def _calc_phase_angles(self, state: ArrayLike, uncompute: bool) -> None:
@@ -466,10 +470,10 @@ class RotationTree:
         is a phase offset for each coefficient that has to be corrected. This offset is half of the
         turn angle applied, and is added to the phase for each coefficient.
         """
-        offsets = self.phase_offsets()
+        offsets = self.phase_offsets(uncompute)
         angles = np.array([np.angle(c) for c in state])
         # flip angle if uncompute
-        deltas = [(1 - 2 * uncompute) * (a - o) for a, o in zip(angles, offsets)]
+        deltas = [(1 - 2 * uncompute) * a - o for a, o in zip(angles, offsets)]
         bitsize = (len(state) - 1).bit_length()
         for qi in range(bitsize):
             width = 2 ** (qi + 1)

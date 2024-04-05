@@ -50,12 +50,11 @@ class SynthesizeGateHR(Bloq):
 
         soqs["ph_reg"] = bb.allocate(self.phase_bitsize)
         soqs["amp_reg"] = bb.allocate(self.phase_bitsize)
-        soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
         for i, ui in self.cols:
             amps, phases, gl = RotationTree(ui, False).get_angles()
             amps_t, phases_t, gl_t = RotationTree(ui, True).get_angles()
-            # soqs = self._r_ui_t(bb, amps_t, phases_t, gl_t, **soqs)
-            # soqs["ra"], soqs["state"] = self._reflection_core(bb, i, soqs["ra"], soqs["state"])
+            soqs = self._r_ui_t(bb, amps_t, phases_t, gl_t, **soqs)
+            soqs["ra"], soqs["state"] = self._reflection_core(bb, i, soqs["ra"], soqs["state"])
             soqs = self._r_ui(bb, amps, phases, gl, **soqs)
         bb.free(soqs.pop("ph_reg"))
         bb.free(soqs.pop("amp_reg"))
@@ -69,7 +68,7 @@ class SynthesizeGateHR(Bloq):
         return soqs
 
 
-    def _r_ui_t(self, bb: BloqBuilder, amps_t: Tuple[Tuple[float,...],...], phases_t: Tuple[Tuple[float,...],...], **soqs: SoquetT) -> Dict[str, SoquetT]:
+    def _r_ui_t(self, bb: BloqBuilder, amps_t: Tuple[Tuple[float,...],...], phases_t: Tuple[Tuple[float,...],...], global_ph: float, **soqs: SoquetT) -> Dict[str, SoquetT]:
         r"""Registers are:
             * ra: reflection ancilla
             * state: input qubits
@@ -77,12 +76,40 @@ class SynthesizeGateHR(Bloq):
             * ph_reg: register to store the phase angle
             * phase_grad: phase gradient register
         """
-        state = bb.split(soqs.pop("state"))
-        qubit = state[-1]
-        select = bb.join(state[::-1])
-        initial_qrom = DifferentialQROM(((0,),(0,)), (phases_t[-1], amps_t[-1]), self.phase_bitsize)
-        qubit, select, amp_reg, ph_reg = bb.add()
-        soqs["state"] = bb.join(state)
+        soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
+        pre_post_gates = ((1, (-1, Rx(angle=np.pi / 2), Rx(angle=-np.pi / 2))),)
+        qubits = bb.split(soqs.pop("state"))
+        soqs_qrom = {"target0_": soqs.pop("ph_reg"), "target1_": soqs.pop("amp_reg")}
+        if self.gate_bitsize > 1:
+            soqs_qrom["selection"] = bb.join(qubits[:(self.gate_bitsize-1)])
+        qrom = DifferentialQROM(((0,),(0,)), (phases_t[-1], amps_t[-1]), self.phase_bitsize)
+        soqs_qrom = bb.add_d(qrom, **soqs_qrom)
+        if self.gate_bitsize > 1:
+            qubits[:(self.gate_bitsize-1)] = bb.split(soqs_qrom.pop("selection"))
+        for i, (amp_qubit, ph_qubit) in list(enumerate(zip(amps_t, phases_t)))[::-1]:
+            adders = RotationViaAddition(pre_post_gates, 2, self.phase_bitsize, 2)
+            control = bb.join(np.array([soqs.pop("ra"), qubits[i]]))
+            control, soqs_qrom["target0_"], soqs_qrom["target1_"], soqs["phase_grad"] = bb.add(
+                adders, control=control, target0_=soqs_qrom["target0_"], target1_=soqs_qrom["target1_"], phase_grad=soqs["phase_grad"]
+            )
+            control_qubits = bb.split(control)
+            soqs["ra"] = control_qubits[0]
+            qubits[i] = control_qubits[1]
+            if i != 0:
+                angles = (phases_t[i-1], amps_t[i-1])
+            else:
+                angles = ((0,), (0,))
+            qrom = DifferentialQROM((ph_qubit, amp_qubit), angles, self.phase_bitsize)
+            if i != 0:
+                soqs_qrom["selection"] = bb.join(qubits[:i])
+            soqs_qrom = bb.add_d(qrom, **soqs_qrom)
+            if i != 0:
+                qubits[:i] = bb.split(soqs_qrom.pop("selection"))
+        soqs["ph_reg"] = soqs_qrom.pop("target0_")
+        soqs["amp_reg"] = soqs_qrom.pop("target1_")
+        soqs["state"] = bb.join(qubits)
+        soqs = self._state_global_phase(bb, global_ph, **soqs)
+        soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
         return soqs
 
     def _r_ui(self, bb: BloqBuilder, amps: Tuple[Tuple[float,...],...], phases: Tuple[Tuple[float,...],...], global_ph: float, **soqs: SoquetT) -> Dict[str, SoquetT]:
@@ -93,7 +120,7 @@ class SynthesizeGateHR(Bloq):
             * ph_reg: register to store the phase angle
             * phase_grad: phase gradient register
         """
-        print(amps, phases)
+        soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
         pre_post_gates = ((0, (-1, Rx(angle=np.pi / 2), Rx(angle=-np.pi / 2))),)
         qubits = bb.split(soqs.pop("state"))
         soqs = self._state_global_phase(bb, global_ph, **soqs)
@@ -123,6 +150,7 @@ class SynthesizeGateHR(Bloq):
         soqs_qrom = bb.add_d(qrom, **soqs_qrom)
         if i != 0:
             qubits[:-1] = bb.split(soqs_qrom.pop("selection"))
+        soqs["ra"] = bb.add(XGate(), q=soqs["ra"])
         return {"state": bb.join(qubits), "amp_reg": soqs_qrom.pop("target0_"), "ph_reg": soqs_qrom.pop("target1_")} | soqs
     
     def _state_global_phase (self, bb: BloqBuilder, global_phase: int, **soqs: SoquetT) -> Dict[str, SoquetT]:
@@ -135,8 +163,9 @@ class SynthesizeGateHR(Bloq):
         return soqs
     
     def _reflection_core(
-        self, bb: BloqBuilder, i: int, ra: SoquetT, state: List[SoquetT]
+        self, bb: BloqBuilder, i: int, ra: SoquetT, state: SoquetT
     ) -> Tuple[SoquetT, List[SoquetT]]:
+        state = bb.split(state)
         ra, state = self._prepare_i_state(bb, i, ra, state)
         ra = bb.add(Hadamard(), q=ra)
         ra = bb.add(ZGate(), q=ra)
@@ -150,6 +179,7 @@ class SynthesizeGateHR(Bloq):
         ra = bb.add(ZGate(), q=ra)
         ra = bb.add(Hadamard(), q=ra)
         ra, state = self._prepare_i_state(bb, i, ra, state)
+        state = bb.join(state)
         return ra, state
 
     def _prepare_i_state(
@@ -226,7 +256,6 @@ class DifferentialQROM(Bloq):
         return round(rom_value_decimal) % (2**phase_bitsize)
 
     def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
-        print(f"loading: {self.rom_values}")
         soqs = bb.add_d(
             QROM(
                 [np.array(rv) for rv in self.rom_values],
