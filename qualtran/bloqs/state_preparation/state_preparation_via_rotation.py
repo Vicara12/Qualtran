@@ -457,7 +457,7 @@ class RotationTree:
             rang = 2 ** (sites - i)
             for block in range(2**i):
                 if uncompute:
-                    angle = (2*np.pi + self.amplitude_angles[i][block]) / 2
+                    angle = (2 * np.pi + self.amplitude_angles[i][block]) / 2
                 else:
                     angle = self.amplitude_angles[i][block] / 2
                 offs[rang * block : rang * (block + 1)] += angle
