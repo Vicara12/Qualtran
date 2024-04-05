@@ -23,6 +23,7 @@ class SynthesizeGateHR(Bloq):
     phase_bitsize: int
     internal_phase_grad: bool = False
     internal_refl_ancilla: bool = True
+    optimize: bool = True
 
     @property
     def gate_bitsize(self):
@@ -53,7 +54,7 @@ class SynthesizeGateHR(Bloq):
         for index, (i, ui) in enumerate(self.cols):
             amps, phases, gl = RotationTree(ui, False).get_angles()
             amps_t, phases_t, gl_t = RotationTree(ui, True).get_angles()
-            if index != 0:
+            if index != 0 and self.optimize:
                 if self.gate_bitsize > 1:
                     soqs = self._preparation_transition(
                         bb,
@@ -80,9 +81,9 @@ class SynthesizeGateHR(Bloq):
                         (0,),
                         **soqs,
                     )
-            soqs = self._r_ui_t(bb, amps_t, phases_t, gl_t, index == 0, **soqs)
+            soqs = self._r_ui_t(bb, amps_t, phases_t, gl_t, index == 0 or not self.optimize, **soqs)
             soqs["ra"], soqs["state"] = self._reflection_core(bb, i, soqs["ra"], soqs["state"])
-            soqs = self._r_ui(bb, amps, phases, gl, index == len(self.cols) - 1, **soqs)
+            soqs = self._r_ui(bb, amps, phases, gl, index == len(self.cols) - 1 or not self.optimize, **soqs)
             if self.gate_bitsize > 1:
                 amps_pre = amps[-2]
                 phases_pre = phases[-2]
@@ -90,7 +91,6 @@ class SynthesizeGateHR(Bloq):
             phases_left = phases[-1]
         bb.free(soqs.pop("ph_reg"))
         bb.free(soqs.pop("amp_reg"))
-
         if self.internal_phase_grad:
             bb.add(
                 PhaseGradientState(self.phase_bitsize).adjoint(), phase_grad=soqs.pop("phase_grad")
@@ -260,7 +260,7 @@ class SynthesizeGateHR(Bloq):
         )
         qrom_right = DifferentialQROM(
             (amps_left, phases_center, amps_right),
-            (phases_post, amps_post, zero_angles),
+            (amps_post, phases_post, zero_angles),
             self.phase_bitsize,
         )
         adders = RotationViaAddition(pre_post_gates, 3, self.phase_bitsize, 2)
