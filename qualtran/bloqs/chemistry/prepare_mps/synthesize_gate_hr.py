@@ -17,7 +17,7 @@ from qualtran.drawing import show_bloq
 
 
 @attrs.frozen
-class SynthesizeGateHR(Bloq):
+class SynthesizeGateViaHR(Bloq):
 
     cols: Tuple[Tuple[int, Tuple[complex, ...]], ...]
     phase_bitsize: int
