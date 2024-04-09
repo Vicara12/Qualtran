@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 
 import attrs
 import cirq
@@ -13,7 +13,10 @@ from qualtran.bloqs.mcmt.multi_control_multi_target_pauli import MultiControlPau
 from qualtran.bloqs.qrom import QROM
 from qualtran.bloqs.rotations.phase_gradient import AddIntoPhaseGrad, PhaseGradientState
 from qualtran.bloqs.state_preparation.state_preparation_via_rotation import RotationTree
+from qualtran.cirq_interop.t_complexity_protocol import TComplexity
 from qualtran.drawing import show_bloq
+from qualtran.bloqs.basic_gates.t_gate import TGate
+from qualtran.resource_counting import BloqCountT, SympySymbolAllocator
 
 
 @attrs.frozen
@@ -337,13 +340,15 @@ class SynthesizeGateViaHR(Bloq):
 
     def _reflect(self, bb: BloqBuilder, reg: SoquetT):
         mult_control_flip = MultiControlPauli(
-            cvs=tuple([0] * (self.gate_bitsize + 1)), target_gate=cirq.Z
+            cvs=(0,) * self.gate_bitsize, target_gate=cirq.Z
         )
-        ancilla = bb.allocate(1)
-        ancilla = bb.add(XGate(), q=ancilla)
-        reg, ancilla = bb.add(mult_control_flip, controls=reg, target=ancilla)
-        ancilla = bb.add(XGate(), q=ancilla)
-        bb.free(ancilla)
+        qubits = bb.split(reg)
+        controls = bb.join(qubits[:-1])
+        qubits[-1] = bb.add(XGate(), q=qubits[-1])
+        controls, qubits[-1] = bb.add(mult_control_flip, controls=controls, target=qubits[-1])
+        qubits[-1] = bb.add(XGate(), q=qubits[-1])
+        qubits[:-1] = bb.split(controls)
+        reg = bb.join(qubits)
         return reg
 
 
@@ -402,16 +407,21 @@ class DifferentialQROM(Bloq):
         rom_value_decimal = 2**phase_bitsize * angle / (2 * np.pi)
         return round(rom_value_decimal) % (2**phase_bitsize)
 
-    def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
-        soqs = bb.add_d(
-            QROM(
-                [np.array(rv) for rv in self.rom_values],
-                selection_bitsizes=(self.selection_bitsize,),
-                target_bitsizes=(self.target_bitsize,) * len(self.rom_values),
-            ),
-            **soqs,
-        )
-        return soqs
+    # def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
+    #     soqs = bb.add_d(
+    #         QROM(
+    #             [np.array(rv) for rv in self.rom_values],
+    #             selection_bitsizes=(self.selection_bitsize,),
+    #             target_bitsizes=(self.target_bitsize,) * len(self.rom_values),
+    #         ),
+    #         **soqs,
+    #     )
+    #     return soqs
+
+    def build_call_graph(self, ssa: 'SympySymbolAllocator') -> Set['BloqCountT']:
+        return {
+            (TGate(), max(0,4*(2**self.selection_bitsize - 2))),
+        }
 
 
 @attrs.frozen
@@ -443,11 +453,11 @@ class RotationViaAddition(Bloq):
                 pre_post_all.append((0, None, None))
         return tuple(pre_post_all)
 
-    def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
-        adder = AddIntoPhaseGrad(self.target_bitsize, self.target_bitsize)
-        for i in range(self.num_angle_soqs):
-            soqs = self.apply_ith_rotation(i, bb, adder, **soqs)
-        return soqs
+    # def build_composite_bloq(self, bb: BloqBuilder, **soqs: SoquetT) -> Dict[str, SoquetT]:
+    #     adder = AddIntoPhaseGrad(self.target_bitsize, self.target_bitsize)
+    #     for i in range(self.num_angle_soqs):
+    #         soqs = self.apply_ith_rotation(i, bb, adder, **soqs)
+    #     return soqs
 
     def apply_ith_rotation(self, i: int, bb: BloqBuilder, adder: Bloq, **soqs: SoquetT):
         pre_post = self.pre_post_all[i]
@@ -484,3 +494,8 @@ class RotationViaAddition(Bloq):
         else:
             raise Exception("not implemented")
         return ctrl, a, b
+    
+    def build_call_graph(self, ssa: 'SympySymbolAllocator') -> Set['BloqCountT']:
+        return {
+            (TGate(), 4*self.num_angle_soqs*(2*(self.target_bitsize-1) + (self.num_controls-1))),
+        }
